@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import datetime
 from datetime import datetime, timedelta
@@ -7,18 +6,14 @@ import json
 import logging
 import os
 import configparser
-import copy
+import AC_server_command
 
 import discord
 import openai
-from discord import Embed, File, ButtonStyle, ui, Interaction
-from discord.ui import Button, View, Select
+from discord import Embed, File
 from discord.ext import commands
 from dotenv import load_dotenv
 
-
-
-import gpt
 from gpt import OpenAI
 
 intents = discord.Intents.default()
@@ -30,22 +25,28 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='>', intents=intents)
 
+# Setup Some Variables
+
 last_cleanup_time = 0
 cleanup_interval = 12 
 global cleanup_enabled
 cleanup_enabled = True 
 user_id_to_monitor = 663521697860943936 # iRacing Stats bot
 
+# Setup Logging 
 logger = logging.getLogger("chatsrd_log")
 logger.setLevel(logging.DEBUG)
 handler = logging.FileHandler("chat_srd.log", encoding="utf-8", mode="a")
 print(f"Log file created at: {handler.baseFilename}")
 handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s"))
 logger.addHandler(handler)
+
+
 load_dotenv()
 import json
 openai = OpenAI()
 config = configparser.ConfigParser()
+
 
 def load_configuration():
     with open('configuration.json', 'r') as file:
@@ -58,10 +59,18 @@ def save_configuration(configuration):
 
 @bot.command(name='chief')
 async def chief(ctx, *message: str):
+    """
+    Sets up an OpenAI chatbot and responds to user prompts with generated
+    text.
+    
+    :param ctx: ctx for the channel where the command was called
+    :param message: The message to send to the chatbot
+    """
     configuration = load_configuration()
     if configuration['setup_ai'] is True: 
         prompt = "".join(f"{word} " for word in message)
         openai_check_result = openai.setup_ai(prompt)
+        logger.info(f"Chief command called with prompt: {prompt}")
         #if openai.setup_ai is none retry the prompt 5 times
         if openai_check_result is None:
             logger.info('An error occured, retrying prompt.')
@@ -81,13 +90,19 @@ async def chief(ctx, *message: str):
 @bot.command(name='setupsheet', description='Displays a car setup cheat sheet')
 async def setupsheet(ctx):
     await ctx.send(file=File('.\\images\setup-sheet.jpg'))
+    logger.info(f"{ctx.author} called the setupsheet command.")
 
 @bot.command(name='sdk', description='Watch SDK get into a wreck')
 async def sdk(ctx):
     await ctx.send("https://www.twitch.tv/sdktheway")
+    logger.info(f"{ctx.author} called the SDK command.")
 
 @bot.command(name='commands', help='Show a list of all Chat-SRD commands\n Usage: /commands')
 async def commands_list(ctx):
+    """
+    Shows a list of all Chat-SRD commands.
+    :param ctx: ctx for the channel where the command was called
+    """
     embed = Embed(
         title="Chat-SRD Commands",
         description="Here's a list of available commands:",
@@ -105,6 +120,11 @@ async def commands_list(ctx):
 
 @bot.command(name='autoclean', help='Enables or disables the automated iRacing Stats Cleanup.')
 async def autoclean(ctx, action: str):
+    """
+    Enables or disables the automated iRacing Stats Cleanup.
+    :param ctx: ctx for the channel where the command was called
+    :param action: Enable or disable the automated iRacing Stats Cleanup.
+    """
     if action.lower() not in ["enable", "disable"]:
         await ctx.send("Invalid action. Please use either /autoclean enable or disable.")
         logger.warning("Invalid action entered for /autoclean command.")
@@ -119,8 +139,16 @@ async def autoclean(ctx, action: str):
         logger.info(f"{ctx.author} disabled the iRacing Stats Autoclean.")
 
 @bot.command(name='interval', help='Sets the time in hours iRacing Stats Cleanup will wait between each cleanup.\n Usage: /interval <hours>')
-@commands.has_permissions(manage_messages=True) 
+@commands.has_permissions(manage_messages=True)
 async def interval(ctx, hours: int):
+    """
+    Sets the cleanup interval for an iRacing stats thread based on the inputted
+    number of hours.
+    
+    :param ctx: ctx for the channel where the command was called
+    :param hours: This parameter is used to set the interval in hours (int) at which the
+    iRacing Stats Thread will be cleaned up.
+    """
     global cleanup_interval
     cleanup_interval = hours
     await ctx.send(f'iRacing Stats Thread Cleanup interval set to {cleanup_interval} hours.')
@@ -128,6 +156,12 @@ async def interval(ctx, hours: int):
 
 @bot.command(name='cleanup', help='Manually cleans up iRacing Stats threads.\n Usage: /cleanup')
 async def cleanup_now(ctx):
+    """
+    Cleans up all messages in threads made by the iRacing Stats bot.
+    
+    :param ctx: ctx for the channel where the command was called
+    """
+
     global user_id_to_monitor
     deleted_messages_count = 0
     for channel_id in read_channel_ids():
@@ -137,6 +171,7 @@ async def cleanup_now(ctx):
             async for message in channel.history(limit=None):
                 if message.author.id == user_id_to_monitor:
                     messages_to_delete.append(message)
+                    logger.info("Calculating messages for deletion...")
                     if len(messages_to_delete) >= 100:
                         await channel.delete_messages(messages_to_delete)
                         deleted_messages_count += len(messages_to_delete)
@@ -144,6 +179,7 @@ async def cleanup_now(ctx):
             if messages_to_delete:  # if there are leftover messages less than 100
                 await channel.delete_messages(messages_to_delete)
                 deleted_messages_count += len(messages_to_delete)
+                logger.info(f"Deleted {deleted_messages_count} messages.")
             await channel.send(f'Manual Cleanup Completed: Deleted {deleted_messages_count} messages.')
             logger.info('Manual cleanup completed.')
 
@@ -250,8 +286,8 @@ async def log(ctx, action: str = "get"):
         await ctx.send("Invalid action. Usage: /log <get/clear>")
         logger.warning("Invalid action entered for /log command.")
 
-# Admin / Moderator command: Grant a specific number of Feedback Points to a user.
 
+# Start the bot and set cleanup time 
 
 @bot.event
 async def on_ready():
@@ -265,11 +301,14 @@ async def on_ready():
     bot.loop.create_task(cleanup_old_messages())
 
 async def cleanup_old_messages():
+    """_summary_ : Deletes messages older than the cleanup interval from the channels in the channel_ids list.
+    """
+
     global last_cleanup_time, cleanup_interval, cleanup_enabled, user_id_to_monitor
 
     while not bot.is_closed():
         if cleanup_enabled:
-            now = datetime.now()\
+            now = datetime.now()
             
         if now > last_cleanup_time + timedelta(hours=cleanup_interval):
                 last_cleanup_time = now
@@ -280,118 +319,64 @@ async def cleanup_old_messages():
                         async for message in channel.history(limit=None):
                             if message.author.id == user_id_to_monitor and message.created_at.timestamp() < now - cleanup_interval * 3600:
                                 await message.delete()
+                                logger.info(f"Deleted messages by {message.author} in {message.channel}:\n{message.content}")
                                 deleted_messages.append(message)
                         await channel.send(f'iRacing Reports Cleanup Completed: Deleted {len(deleted_messages)} messages.')
                         logger.info('Auto Cleanupd iRacing Stats message on schedule.')
         await asyncio.sleep(60)  # check every minute
         cleanup_old_messages.start()
 
-class PageView(ui.View):
-    def __init__(self, embeds):
-        super().__init__(timeout=None)
-        self.embeds = embeds
-        self.current_page = 0
-
-    @discord.ui.button(emoji='\u23EE', style=discord.ButtonStyle.secondary)  # rewind button
-    async def go_first(self, button, interaction):
-        self.current_page = 0
-        await interaction.message.edit(embed=self.embeds[self.current_page])
-
-    @discord.ui.button(emoji='\u25C0', style=discord.ButtonStyle.secondary)  # left arrow button
-    async def go_previous(self, button, interaction):
-        if self.current_page > 0:
-            self.current_page -= 1
-            await interaction.message.edit(embed=self.embeds[self.current_page])
-
-    @discord.ui.button(emoji='\u25B6', style=discord.ButtonStyle.secondary)  # right arrow button
-    async def go_next(self, button, interaction):
-        if self.current_page < len(self.embeds) - 1:
-            self.current_page += 1
-            await interaction.message.edit(embed=self.embeds[self.current_page])
-
-    @discord.ui.button(emoji='\u23ED', style=discord.ButtonStyle.secondary)  # fast-forward button
-    async def go_last(self, button, interaction):
-        self.current_page = len(self.embeds) - 1
-        await interaction.message.edit(embed=self.embeds[self.current_page])
-
-
-
-class ConfigSelect(Select):
-    def __init__(self, options):
-        super().__init__(placeholder="Select a configuration category:", options=options)
-
-    async def callback(self, interaction):
-        selected_option = self.values[0]
-        
-        # Fetch configuration values for the selected option
-        config_values = dict(config[selected_option])
-
-        # Create the embed
-        embed = Embed(title=f"Configuration: {selected_option}", description="Here are the settings for this section:")
-
-        # Add fields to the embed for each configuration value
-        for key, value in config_values.items():
-            embed.add_field(name=key, value=value, inline=False)
-
-        await interaction.response.edit_message(embed=embed)
-
-class ConfigSelectView(ui.View):
-    def __init__(self):
-        super().__init__()
-        options = []
-        config.read('.\\ac_server_config\discord_server_cfg.ini')
-        for section in config.sections():
-            options.append(discord.SelectOption(label=section))
-        self.add_item(ConfigSelect(options))
 
 @bot.command(name="ac_config")
 async def ac_config(ctx):
-    view = ConfigSelectView()
-    await ctx.send("Select a configuration category:", view=view)
+    """
+    View the AC server configuration.
+    :param: ctx: ctx for the channel where the command was called
+    """
+    view = AC_server_command.ConfigSelectView()
+    await ctx.send("Select a configuration category:", view=view, delete_after=45)
 
-
-class MenuView(View):
-    def __init__(self):
-        super().__init__()
-        button0 = Button(row=1, label="#SRD - AC Hotlap Server Manager", style=discord.ButtonStyle.red, disabled=True, emoji="<:srdLogo:829183292322218044>")
-        button1 = Button(row=2, label="Server General Config", style=discord.ButtonStyle.green, emoji="⚙️")
-        button2 = Button(row=2, label="FTP/Commit Server Settings", style=discord.ButtonStyle.green, emoji="🔧")
-        button3 = Button(row= 2, label="Commands", style=discord.ButtonStyle.green, emoji="🏎️")
-
-        button0.callback = self.button0_callback
-        button1.callback = self.button1_callback
-        button2.callback = self.button2_callback
-        button3.callback = self.button3_callback
-
-        self.add_item(button0)
-        self.add_item(button1)
-        self.add_item(button2)
-        self.add_item(button3)
-
-    async def button0_callback(self, interaction):
-    # Actions for button 2 click
-        await interaction.response.send_message("Button 2 clicked!")
-
-    async def button1_callback(self, interaction):
-        message = copy.copy(interaction.message)
-        message.content = f"{bot.command_prefix}ac_config"
-        new_ctx = await bot.get_context(message, cls=commands.Context)
-        new_ctx.author = interaction.user
-        await bot.invoke(new_ctx)
-
-
-    async def button2_callback(self, interaction):
-        # Actions for button 2 click
-        await interaction.response.send_message("Button 2 clicked!")
-
-    async def button3_callback(self, interaction):
-        # Actions for button 3 click
-        await interaction.response.send_message("Button 3 clicked!")
 
 @bot.command(name="ac_menu")
 async def ac_menu(ctx):
-    view = MenuView()
-    await ctx.send("Select a configuration category:", view=view)
+    """
+    Bring up the AC server management buttons.
+    :param: ctx: ctx for the channel where the command was called
+    """
+    view = AC_server_command.MenuView()
+    await ctx.send("Select a configuration category:", view=view, delete_after=45)
+
+
+@bot.command(name="ac_set")
+@commands.has_permissions(manage_messages=True)
+async def ac_set(ctx, section: str, key: str, *, value: str):
+    """
+    Updates a key-value pair in a configuration file and logs the changes.
+    Modifies a copy of the base ini file before merging it back to create a new file.
+    This step is necessary to limit the information available to the bot. 
+    """
+    # Load the existing config file
+    config.read('.\\ac_server_config\discord_server_cfg.ini')
+    # If the section exists in the config
+    section_lower = section.lower()
+
+    # Check if the section exists in the config (ignoring case)
+    for config_section in config.sections():
+        if config_section.lower() == section_lower:
+            # If the key exists in the section
+            if key in config[config_section]:
+                # Update the key with the new value
+                config[config_section][key] = value
+                # Save the updated config file
+                with open('.\\ac_server_config\discord_server_cfg.ini', 'w') as configfile:
+                    config.write(configfile)
+                await ctx.send(f"Updated {key} in {config_section} with {value}.")
+                AC_server_command.merge_configs()
+                logger.info(f"{ctx.author} updated {key} in {config_section} with {value} and the configuration has been merged with base config.")
+                return
+            else:
+                await ctx.send(f"{section} not found in the config file.")
+                logger.warning(f"Key not found:  {ctx.author} tried to update {key} in {config_section} with {value} but the key was not found in the config file.")
    
 
 if __name__ == "__main__":
