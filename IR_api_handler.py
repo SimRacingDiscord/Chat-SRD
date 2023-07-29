@@ -1,38 +1,108 @@
 import datetime
 from iracingdataapi.client import irDataClient
-api = irDataClient(username='davechadwick@gmail.com', password='@Finnegan2022@')
 import matplotlib.pyplot as plt
+import os
+from dotenv import load_dotenv
 
-def convtime(ms):
-    delta = datetime.timedelta(milliseconds=(ms)).total_seconds()
-    return delta
+load_dotenv()
 
-def lookup_driver(displayname):
-    driver_id = api.lookup_drivers(displayname)[0]['cust_id']
-    return driver_id   
 
-def get_recentincidents(displayname):
-    driver_id = lookup_driver(displayname)
-    recentraces = api.stats_member_recent_races(driver_id)
-    incidents = 0
-    for race in recentraces['races']:
-        incidents += race['incidents']
-    return displayname, incidents
+def ms_to_laptime(ms):
+    total_secs = ms / 10000
+    minutes = int(total_secs // 60)
+    seconds = int(total_secs % 60)
+    remaining_ms = int(ms % 1000)
+    return f"{minutes}:{seconds:02d}.{remaining_ms:03d}"
 
-  
 
-        
-def get_seasons(league_id=8804):
-    seasons = []
-    for eachseason in api.league_seasons(league_id)['seasons']:
-        seasons.append(tuple((eachseason['season_name'], eachseason['season_id'])))
-        return seasons
+class IR_Handler:
+    def __init__(self):
+        username = os.getenv("IR_USER")
+        password = os.getenv("IR_PASSWORD")
+        self.api = irDataClient(username=username, password=password)
 
-def get_seasonstandings(season_number, league_id=8804):
-    season_id = get_seasons(8804)
-    season_id = season_id[season_number - 1][1]
-    standings = ""
-    for eachdriver in api.league_season_standings(league_id=league_id, season_id=season_id)['standings']['driver_standings']:
-        standings.append(tuple((eachdriver['rownum'], eachdriver['driver']['display_name'])))
-        return standings
+    def convtime(self):
+        return datetime.timedelta(milliseconds=self).total_seconds()
 
+    def lookup_driver(self, display_name):
+        drivers = self.api.lookup_drivers(display_name)
+        if drivers:  # check if list is not empty
+            return drivers[0]["cust_id"]
+
+    def get_recentincidents(self, *display_names):
+        incidents = []
+        names = []
+        for name in display_names:
+            names.append(name)
+            driver_id = self.lookup_driver(name)  # Corrected here
+            recentraces = self.api.stats_member_recent_races(driver_id)
+            driver_incidents = sum(race["incidents"] for race in recentraces["races"])
+            incidents.append(driver_incidents)
+        return dict(zip(names, incidents))
+
+    def get_member_bests(self, display_name):
+        driver_id = self.lookup_driver(display_name)
+        return self.api.stats_member_bests(driver_id)
+
+    def get_member_irating_chart(self, *display_names):
+        chart_data = []
+        for name in display_names:
+            driver_id = self.lookup_driver(name)
+            data = self.api.member_chart_data(driver_id)
+            chart_data.append(data)
+        return dict(zip(display_names, chart_data))
+
+    def get_member_last_race(self, display_name):
+        driver_id = self.lookup_driver(display_name)
+        return self.api.stats_member_recent_races(driver_id)["races"][0]
+
+    def get_result_lap_data(self, display_name, subsession_id):
+        cust_id = self.lookup_driver(display_name)
+        race_results = self.api.result_lap_data(
+            cust_id=cust_id, subsession_id=subsession_id
+        )
+        lap_times = []
+        for lap in race_results:
+            lap_times.append(lap["lap_time"])
+        return lap_times
+
+    def get_subsession(self, subsession_id):
+        return self.api.result(subsession_id)
+
+    def get_result(self, subsession_id):
+        return self.api.result(subsession_id)
+
+    def get_carmodel(self, car_id):
+        cars_list = self.api.get_cars()
+        car_id_tomatch = car_id
+        matching_cars = []
+        for car in cars_list:
+            if car["car_id"] == car_id_tomatch:
+                matching_cars.append(car["car_name"])
+        return (matching_cars)[0]
+
+    def get_laptimes(self, display_name, subsession_id=None):
+        cust_id = self.lookup_driver(display_name)
+        if subsession_id is not None:
+            subsession_id = int(subsession_id)
+        else:
+            subsession_id = self.api.stats_member_recent_races(cust_id)["races"][0][
+                "subsession_id"
+            ]
+
+        try:
+            lap_data = self.api.result_lap_data(
+                cust_id=cust_id, subsession_id=subsession_id
+            )
+        except RuntimeError as e:
+            print(e.args[1].text)  # Prints the error message from the API
+            raise e
+
+        lap_times = [lap["lap_time"] for lap in lap_data]
+        lap_times = [lap for lap in lap_times if lap != -1][1:]  # exclude the first lap
+        lap_numbers = list(range(1, len(lap_times) + 1))
+        return dict(zip(lap_numbers, lap_times))
+
+    def get_race_position_data(self, subsession_id):
+        data = self.api.result_lap_chart_data(subsession_id=subsession_id)
+        return data
