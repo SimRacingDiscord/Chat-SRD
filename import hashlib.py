@@ -1,8 +1,6 @@
 import hashlib
 import base64
 
-username = "davechadwick@gmail.com"
-password = "*8wDBn5nn2PK5HN$uK4G"
 
 
 def encode_pw(username, password):
