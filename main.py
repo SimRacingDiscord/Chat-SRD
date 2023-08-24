@@ -14,12 +14,14 @@ import random
 import openai
 import iracing_stats
 from IR_api_handler import IR_Handler
-from discord import Embed, File
+from ir_service_monitor import ir_service_monitor
+from discord import Embed, File, app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from gpt import OpenAI
 import re
 import pandas as pd
+import interactions
 
 
 intents = discord.Intents.default()
@@ -29,7 +31,8 @@ intents.guilds = True
 intents.reactions = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=">", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
+#client = interactions.Client(intents=intents)
 
 # Setup Some Variables
 
@@ -37,9 +40,13 @@ last_cleanup_time = 0
 cleanup_interval = 12
 global cleanup_enabled
 cleanup_enabled = True
-user_id_to_monitor = [663521697860943936, 1085398619278024766]  # iRacing Stats bot
+ir_service_monitor_enabled = False
+user_id_to_monitor = 663521697860943936  # iRacing Stats bot
 self_id_to_monitor = 1085398619278024766  # ChatSRD bot
-
+ir_service_monitor_channels = [
+    1121817152081629234,
+    204786457280380928,
+]  # iRacing Service Monitor
 # Setup Logging
 logger = logging.getLogger("chatsrd_log")
 logger.setLevel(logging.DEBUG)
@@ -79,10 +86,14 @@ def ms_to_laptime(ms):
     return f"{minutes}:{seconds:02d}.{remaining_ms:03d}"
 
 
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i : i + n]
+
 @bot.command(
     name="chief",
-    help="Sets up an OpenAI chatbot and responds to user prompts with generated text.\n Usage: /chief <prompt>",
-)
+    help="Sets up an OpenAI chatbot and responds to user prompts with generated text.\n Usage: /chief <prompt>",)
 async def chief(ctx, *message: str):
     configuration = load_configuration()
     if configuration["setup_ai"] is True:
@@ -159,6 +170,28 @@ async def autoclean(ctx, action: str):
 
 
 @bot.command(
+    name="ir_service_monitor",
+    help="Enables or disables the automated iRacing Service Monitor.\n Usage: /ir_service_monitor <enable/disable>",
+)
+@commands.has_permissions(manage_messages=True)
+async def ir_service_monitor(ctx, action: str):
+    if action.lower() not in ["enable", "disable"]:
+        await ctx.send(
+            "Invalid action. Please use either /ir_service_monitor enable or disable."
+        )
+        logger.warning("Invalid action entered for /ir_service_monitor command.")
+        return
+    if action.lower() == "enable":
+        ir_service_monitor_enabled = True
+        await ctx.send("iRacing Service Monitor enabled.")
+        logger.info(f"{ctx.author} enabled iRacing Service Monitor.")
+    elif action.lower() == "disable":
+        ir_service_monitor_enabled = False
+        await ctx.send("iRacing Service Monitor disabled.")
+        logger.info(f"{ctx.author} disabled the iRacing Service Monitor.")
+
+
+@bot.command(
     name="interval",
     help="Sets the time in hours iRacing Stats Cleanup will wait between each cleanup.\n Usage: /interval <hours>",
 )
@@ -187,7 +220,7 @@ async def cleanup_now(ctx):
             deleted_messages = []
             async for message in channel.history(limit=None):
                 if (
-                    message.author.id in user_id_to_monitor
+                    message.author.id == user_id_to_monitor
                     and message.created_at.timestamp()
                     < (now - timedelta(hours=cleanup_interval)).timestamp()
                 ):
@@ -196,7 +229,18 @@ async def cleanup_now(ctx):
                         f"Deleted messages by {message.author} in {message.channel}:\n{message.content}"
                     )
                     deleted_messages.append(message)
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1.5)
+
+                elif (
+                    message.author.id == self_id_to_monitor
+                    and message.created_at.timestamp()
+                    < (now - timedelta(hours=cleanup_interval)).timestamp()
+                ):
+                    await message.delete()
+                    await asyncio.sleep(1.5)
+                    logger.info(
+                        f"Deleted messages by {message.author} in {message.channel}:\n{message.content}"
+                    )
             await channel.send(
                 f"iRacing Reports \ Chat-SRD Cleanup Completed: Deleted {len(deleted_messages)} messages."
             )
@@ -305,11 +349,42 @@ async def log(ctx, action: str = "get"):
 async def on_ready():
     print(f"{bot.user.name} has connected to Discord.")
     logger.info(f"{bot.user.name} has connected to Discord.")
+    try: 
+        synced = await bot.tree.sync()
+        print(f"Synced {synced} commands")
+    except Exception as e:
+        print(e)
     global last_cleanup_time
     last_cleanup_time = datetime.now()
     logger.info("Chat SRD Autoclean has started.")
     bot.loop.create_task(cleanup_old_messages())
     AC_server_command.parse_results_json()
+    # bot.loop.create_task(ir_service_monitor_task())
+
+@commands.has_permissions(manage_messages=True)
+@bot.tree.command (name='say')
+@app_commands.describe(thing_to_say = "What to say")
+async def say(Interaction: discord.Interaction, thing_to_say: str):
+    await Interaction.response.send_message(thing_to_say, ephemeral = False)
+
+async def ir_service_monitor_task():
+    global ir_service_monitor_enabled
+    while True:
+        if ir_service_monitor_enabled:
+            webhook_url = "https://discord.com/api/webhooks/1134726152150331442/g_DeNqVdYBLUCrhovxULDxCKECvYs3hXO8lIscDRB9tv6hoi8M0uy8OV5eAWFQf7r2wI"
+            service_monitor = ir_service_monitor(webhook_url)
+            channel = bot.get_channel(ir_service_monitor_channels[0])
+            maintenance_message = []
+            while True:
+                status = await service_monitor.fetch_status()
+                if status["maint_messages"] != maintenance_message:
+                    maintenance_message = [status["maint_messages"]]
+                    await channel.send(
+                        f"iRacing Maintenance Message: {maintenance_message}"
+                    )
+                else:
+                    print("IR Service Monitor disabled")
+                await asyncio.sleep(60)
 
 
 async def cleanup_old_messages():
@@ -458,80 +533,154 @@ async def ir_menu(ctx):
     await ctx.send("", view=view, delete_after=45)
 
 
-@bot.command(
-    name="ir_incidents",
-    help="Displays the recent incidents for the specified drivers.\n Usage: /ir_incidents <driver1>, <driver2>, <driver3>",
-)
-async def ir_incidents(ctx, *, names_input):
-    name_list = []
-    name_list = [name.strip() for name in names_input.split(",")]
+@bot.tree.command(name='ir_incidents', description='Displays a bar graph of recent incidents per driver.')
+@app_commands.describe(driver_names="Enter the driver names separated by commas.")
+async def ir_incidents(Interaction: discord.Interaction, driver_names: str):
+    # Process the driver names
+    name_list = [name.strip() for name in driver_names.split(",")]
+    
+    # Fetch data and create the bar graph
     data = iracing_api.get_recentincidents(*name_list)
     iracing_stats.bar_graph_recentincidents(data)
+    
+    # Prepare the file and embed to send
     file = discord.File("./images/incidents.png", filename="incidents.png")
+    hot_pink = int("FF69B4", 16)
     embed = discord.Embed(
-        title="Recent Incidents per Driver", description="Recent incident Report."
+        title="Recent Incidents per Driver",
+        description=f"Recent incident Report for {driver_names}.",
+        color=hot_pink,
     )
     embed.set_image(url="attachment://incidents.png")
-    await ctx.send(file=file, embed=embed)
+    
+    # Send the embed and file
+    await Interaction.response.send_message(embed=embed, file=file, ephemeral=False)
 
 
-@bot.command(
-    name="ir_stats",
-    help="Displays the iRacing stats for the specified drivers.\n Usage: /ir_stats <driver1>, <driver2>, <driver3>",
-)
-async def ir_stats(ctx, *args):
-    raw_args = " ".join(args)
-    split_args = raw_args.split("start_date")  # Split arguments by 'start_date'
-    # Extract drivers
-    drivers = [driver.strip() for driver in split_args[0].split(",") if driver.strip()]
-    # Extract dates
-    start_date_str = None
-    end_date_str = None
-    if len(split_args) > 1:
-        dates = split_args[1].split("end_date")
-        start_date_str = dates[0].strip()
-        if len(dates) > 1:
-            end_date_str = dates[1].strip()
-    try:
-        # Pass the driver names and dates to the function
-        chart_data = iracing_api.get_member_irating_chart(*drivers)
-        iracing_stats.line_chart_irating(chart_data, start_date_str, end_date_str)
-    except Exception as e:
-        await ctx.send(str(e))
 
-    data = iracing_api.get_member_irating_chart(*drivers)
-    dates = []
-    if start_date_str or end_date_str:
-        dates.extend((start_date_str, end_date_str))
+@bot.command()
+async def ir_eventlist(ctx, season_year=None, season_quarter=None):
+    data = iracing_api.get_eventlist(
+        season_year, season_quarter
+    )  # Assuming this returns a dict
+    if not season_quarter or not season_year:
+        season_year, season_quarter = iracing_api.get_current_year_season()
+    if data.get("seasons"):
+        embeds = []
+        for i in range(0, len(data["seasons"]), 10):
+            embed = discord.Embed(
+                title=f"Events for {season_year} Q{season_quarter}", color=0x00FF00
+            )
+            events = "\n".join(
+                [
+                    f"{index+1}. {event['season_name']}"
+                    for index, event in enumerate(data["seasons"][i : i + 10])
+                ]
+            )
+            embed.add_field(name="Events", value=events, inline=False)
+            embeds.append(embed)
+
+        view = ir_data_gui.EmbedPaginatorView(embeds)
+        view.ctx = ctx
+        view.message = await ctx.send(embed=embeds[0], view=view)
     else:
-        dates.append("No Date Selected")
-    # Passing the data and dates to the plotting function
-    iracing_stats.line_chart_irating(data, start_date_str, end_date_str)
-    hot_pink = int("FF69B4", 16)
-    file = discord.File("./images/driver_irating.png", filename="driver_irating.png")
-    embed = Embed(
-        title="iRating History",
-        description=f"IRating over time for driver(s) {drivers}.\n Date Filter: {dates}.",
-        color=discord.Color(hot_pink),
-    )
-    embed.set_image(url="attachment://driver_irating.png")
-    embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
-    await ctx.send(file=file, embed=embed)
+        embed = discord.Embed(
+            title=f"Events for {season_year} Q{season_quarter}",
+            description=f"No events found for {season_year} Q{season_quarter}.",
+            color=0x00FF00,
+        )
+        await ctx.send(embed=embed)
 
 
-@bot.command(
-    name="ir_lastrace",
-    help="Return stats for the drivers last race. \n Usage: /ir_lastrace <driver>",
+@bot.tree.command(name='ir_careerstats', description='Displays a driver\'s career stats.')
+@app_commands.describe(
+    driver_name="Enter the drivers iRacing name "
 )
-async def ir_lastrace(ctx, *display_name):
-    display_name = " ".join(display_name)
-    data = iracing_api.get_member_last_race(display_name)
+async def ir_careerstats(Interaction: discord.Interaction, driver_name: str):
+    #display_name = " ".join(display_name)
+    data = iracing_api.get_member_stats(driver_name)
+
+    # Create an embed object
+    hot_pink = int("FF69B4", 16)
+    embed = Embed(
+        title="Driver Career Stats",
+        color=hot_pink,
+        timestamp=datetime.now(timezone.utc),
+        description=f"Career Stats for {driver_name}",
+    )
+    embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
+
+    # Loop through each category in the stats
+    for item in data["stats"]:
+        category_id = item["category_id"]
+        category = item["category"]
+        starts = item["starts"]
+        wins = item["wins"]
+        top5 = item["top5"]
+        poles = item["poles"]
+        avg_start_position = item["avg_start_position"]
+        avg_finish_position = item["avg_finish_position"]
+        laps = item["laps"]
+        laps_led = item["laps_led"]
+        avg_incidents = item["avg_incidents"]
+        avg_points = item["avg_points"]
+        win_percentage = item["win_percentage"]
+        top5_percentage = item["top5_percentage"]
+        laps_led_percentage = item["laps_led_percentage"]
+        total_club_points = item["total_club_points"]
+
+        # Add a field to the embed object
+        embed.add_field(
+            name=category,
+            value=f"Starts: {starts}\nWins: {wins}\nTop 5s: {top5}\nPoles: {poles}\nAvg Start Position: {avg_start_position}\nAvg Finish Position: {avg_finish_position}\nLaps: {laps}\nLaps Led: {laps_led}\nAvg Incidents: {avg_incidents}\nAvg Points: {avg_points}\nWin Percentage: {win_percentage}\nTop 5 Percentage: {top5_percentage}\nLaps Led Percentage: {laps_led_percentage}\nTotal Club Points: {total_club_points}",
+            inline=True,
+        )
+
+    await Interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name='ir_stats', description='Displays one or more driver\'s iRating history.')
+@app_commands.describe(
+    driver_names="Enter one or more driver's iRacing name. If entering multiple drivers use commas.",
+    start_date="Enter the start date for the iRating plot. (Optional)",
+    end_date="Enter the end date for the iRating plot. (Optional)"
+)
+async def ir_stats_slash(Interaction: discord.Interaction, driver_names: str, start_date: str = None, end_date: str = None):
+    # Extract drivers
+    drivers = [driver.strip() for driver in driver_names.split(",")]
+
+    try:
+        # Pass the driver names to the function
+        chart_data = iracing_api.get_member_irating_chart(*drivers)
+        iracing_stats.line_chart_irating(chart_data, start_date, end_date)
+
+        hot_pink = int("FF69B4", 16)
+        file = discord.File("./images/driver_irating.png", filename="driver_irating.png")
+        embed = discord.Embed(
+            title="iRating History",
+            description=f"IRating over time for driver(s) {drivers}.\n Date Filter: {start_date or 'Start Date Not Specified'} - {end_date or 'End Date Not Specified'}",
+            color=discord.Color(hot_pink),
+        )
+        embed.set_image(url="attachment://driver_irating.png")
+        embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
+
+        await Interaction.response.send_message(embed=embed, file=file, ephemeral=False)
+
+    except Exception as e:
+        await Interaction.response.send_message(str(e))
+
+
+@bot.tree.command(name='ir_lastrace', description="Display Stats on a drivers last race.")
+@app_commands.describe(
+    driver_name="Enter the driver's iRacing name.")
+async def ir_lastrace_slash(Interaction: discord.Interaction , driver_name:str):
+    data = iracing_api.get_member_last_race(driver_name)
     subsession_id = data["subsession_id"]
     subsession_data = iracing_api.get_subsession(subsession_id)
     # add a check to see if the data is empty
     irating_change = data["newi_rating"] - data["oldi_rating"]
     if not data:
-        await ctx.send("No data found for this driver.")
+        await Interaction.response.send_message("No data found for this driver.")
         return
     qualifying_time = data["qualifying_time"]
     if qualifying_time == 0:
@@ -539,7 +688,7 @@ async def ir_lastrace(ctx, *display_name):
 
     hot_pink = int("FF69B4", 16)
     embed = Embed(
-        title=f"Last Race Results for {display_name}", color=discord.Color(hot_pink)
+        title=f"Last Race Results for {driver_name}", color=discord.Color(hot_pink)
     )
     embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
     embed.add_field(name="Year", value=subsession_data["season_year"], inline=True)
@@ -588,71 +737,88 @@ async def ir_lastrace(ctx, *display_name):
     irating_str = f"{irating_change:+} ({data['newi_rating']})"
     embed.add_field(name="iRating", value=irating_str, inline=False)
     # embed.set_footer(text="chat-SRD iRacing Data API Bot - #Simracing Discord")
-    await ctx.send(embed=embed)
+    await Interaction.response.send_message(embed=embed)
 
 
-@bot.command(
-    name="ir_consistency",
-    aliases=["in_consistency"],
-    help="Return the lap times and trend line for their most recent race. \n Usage: /ir_consistency <driver>",
+@bot.tree.command(name='ir_consistency', description="Display a Driver's lap consistency ")
+@app_commands.describe(
+    driver_name="Enter the driver's iRacing name.",
+    subsession_id="Enter the subsession ID if known, or leave blank. (Optional)"
 )
-async def ir_consistency(ctx, *args):
-    subsession_id = None
-    if len(args) == 0:
-        await ctx.send("Please specify a driver.")
+async def ir_consistency_slash(Interaction: discord.Interaction, driver_name: str, subsession_id: int = None):
+
+    if not driver_name:
+        await Interaction.response.send_message("Please specify a driver.", ephemeral=True)
         return
 
     try:
-        # Check if the last argument can be converted to an int
-        # If so, treat it as the subsession_id
-        subsession_id = int(args[-1])
-        display_name = " ".join(args[:-1])
-    except ValueError:
-        # If not, treat all arguments as part of the display_name
-        display_name = " ".join(args)
+        lap_data = iracing_api.get_laptimes(driver_name, subsession_id)
+        if subsession_id is None:
+            race_data = iracing_api.get_member_last_race(driver_name)
+            car = iracing_api.get_carmodel(race_data["car_id"])
+        else:
+            race_data = iracing_api.get_subsession(subsession_id)
+            car = "car"
+        
+        iracing_stats.line_chart_laps(lap_data)
 
-    lap_data = iracing_api.get_laptimes(display_name, subsession_id)
-    if subsession_id is None:
-        race_data = iracing_api.get_member_last_race(display_name)
-        car = iracing_api.get_carmodel(race_data["car_id"])
-    else:
-        race_data = iracing_api.get_subsession(subsession_id)
-        car = "car"
-    iracing_stats.line_chart_laps(lap_data)
-    hot_pink = int("FF69B4", 16)
-    file = discord.File("./images/line_chart_laps.png", filename="line_chart_laps.png")
-    embed = Embed(
-        title="Lap Consistency",
-        description=f"Lap Times for driver {display_name}.\n",
-        color=discord.Color(hot_pink),
-    )
-    embed.add_field(name="Series Name:", value=race_data["series_name"], inline=False)
-    embed.add_field(name="Car Driven:", value=car, inline=False)
-    embed.set_image(url="attachment://line_chart_laps.png")
-    embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
-    await ctx.send(file=file, embed=embed)
+        hot_pink = int("FF69B4", 16)
+        file = discord.File("./images/line_chart_laps.png", filename="line_chart_laps.png")
+        embed = discord.Embed(
+            title="Lap Consistency",
+            description=f"Lap Times for driver {driver_name}.",
+            color=discord.Color(hot_pink),
+        )
+        embed.add_field(name="Series Name:", value=race_data["series_name"], inline=False)
+        embed.add_field(name="Car Driven:", value=car, inline=False)
+        embed.set_image(url="attachment://line_chart_laps.png")
+        embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
+
+        await Interaction.response.send_message(embed=embed, file=file, ephemeral=False)
+
+    except Exception as e:
+        await Interaction.response.send_message(str(e), ephemeral=True)
 
 
-@bot.command(
-    name="ir_raceposition",
-    help="Chart the lap position of each driver over the race session. \n Usage: /ir_raceposition <driver> <subsession_id>",
+@bot.tree.command(name='ir_raceposition', description='Plots a line chart of driver position over a race session.')
+@app_commands.describe(
+    subsession_id="Enter the subsession ID for the desired race session.",
+    interpolate="Select if you want to interpolate the data. If not selected, standard data will be used."
 )
-async def ir_raceposition(ctx, subsession_id):
+async def ir_raceposition_slash(Interaction: discord.Interaction, subsession_id: int, interpolate: bool = False):
     data = iracing_api.get_race_position_data(subsession_id)
-    iracing_stats.line_chart_race_position(data)
-    hot_pink = int("FF69B4", 16)
-    file = discord.File(
-        "./images/race_position_line.png", filename="race_position_line.png"
-    )
-    embed = Embed(
-        title="Driver Position through Race",
-        description=f"Driver position line plot for Race Session {subsession_id}.\n",
-        color=discord.Color(hot_pink),
-    )
-    embed.set_image(url="attachment://race_position_line.png")
-    embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
-    await ctx.send(file=file, embed=embed)
+    try:
+        if interpolate:
+            iracing_stats.line_chart_race_position_interpolate(data)
+            image_filename = "race_position_line_interpolate.png"
+        else:
+            iracing_stats.line_chart_race_position(data)
+            image_filename = "race_position_line.png"
 
+        hot_pink = int("FF69B4", 16)
+        file = discord.File(
+            f"./images/{image_filename}", filename=image_filename
+        )
+
+        if interpolate: 
+            embed = discord.Embed(
+            title="Driver Position through Race - Interpolated",
+            description=f"Driver position interpolated line plot for Race Session {subsession_id}.\n",
+            color=discord.Color(hot_pink)
+        )
+        else:
+            embed = discord.Embed(
+            title="Driver Position through Race",
+            description=f"Driver position line plot for Race Session {subsession_id}.\n",
+            color=discord.Color(hot_pink))
+
+        embed.set_image(url=f"attachment://{image_filename}")
+        embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")
+
+        await Interaction.response.send_message(embed=embed, file=file, ephemeral=False)
+
+    except Exception as e:
+        await Interaction.response.send_message(str(e), ephemeral=True)
 
 @bot.command(
     name="ir_raceposition_interpolate",
@@ -685,13 +851,23 @@ async def ir_commands(ctx):
         color=discord.Color(hot_pink),
     )
     embed.add_field(
+        name="chief",
+        value="Get setup advice from AI trained crew chief. \n Usage: >chief How can I reduce understeer if I'm understeering while steering.",
+        inline=False,
+    )
+    embed.add_field(
         name="ir_menu",
         value="Display the iRacing Stats GUI.\n *In Progress*.",
         inline=False,
     )
     embed.add_field(
         name="ir_stats",
-        value="Display an iRating line graph for one or multiple drivers.\n Usage: >ir_stats <driver> \n >ir_stats <driver1>, <driver2> \n >ir_stats <driver1>, <driver2> start_date <yyyy-mm-dd> end_date <yyyy-mm-dd>",
+        value="Display an iRating line graph for one or multiple drivers. Range can be customized by including start_date and/or end_date arguments.\n Usage: >ir_stats <driver> \n >ir_stats <driver1>, <driver2> \n >ir_stats <driver1>, <driver2> start_date <yyyy-mm-dd> end_date <yyyy-mm-dd>",
+        inline=False,
+    )
+    embed.add_field(
+        name="ir_careerstats",
+        value="Display Career Stats for all series.\n Usage: >ir_careerstats <driver>",
         inline=False,
     )
     embed.add_field(
@@ -717,6 +893,11 @@ async def ir_commands(ctx):
     embed.add_field(
         name="ir_raceposition_interpolate",
         value="Display an interpolated line graph of driver positions during the race.\n Usage: >ir_raceposition_interpolate <subsession_id>",
+        inline=False,
+    )
+    embed.add_field(
+        name="ir_eventlist",
+        value="Displays the iRacing event list for all licenses. Returns current year/season if no arguments supplied.\n Usage: >ir_eventlist \n >ir_eventlist <year> <season>",
         inline=False,
     )
     embed.set_thumbnail(url="https://iili.io/HPr9MoQ.png")

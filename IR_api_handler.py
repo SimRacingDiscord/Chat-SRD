@@ -43,6 +43,10 @@ class IR_Handler:
     def get_member_bests(self, display_name):
         driver_id = self.lookup_driver(display_name)
         return self.api.stats_member_bests(driver_id)
+    
+    def get_member_stats(self, display_name):
+        driver_id = self.lookup_driver(display_name)
+        return self.api.stats_member_career(driver_id)
 
     def get_member_irating_chart(self, *display_names):
         chart_data = []
@@ -80,6 +84,25 @@ class IR_Handler:
             if car["car_id"] == car_id_tomatch:
                 matching_cars.append(car["car_name"])
         return (matching_cars)[0]
+    
+    def get_current_year_season(self):
+        now = datetime.datetime.now()
+        year = now.year
+        month = now.month
+        if month < 4:
+            quarter = 1
+        elif month < 7:
+            quarter = 2
+        elif month < 10:
+            quarter = 3
+        else:
+            quarter = 4
+        return year, quarter
+
+    def get_eventlist(self, season_year, season_quarter):
+        if season_year is None or season_quarter is None:
+            season_year, season_quarter = self.get_current_year_season()
+        return self.api.season_list(season_year, season_quarter)
 
     def get_laptimes(self, display_name, subsession_id=None):
         cust_id = self.lookup_driver(display_name)

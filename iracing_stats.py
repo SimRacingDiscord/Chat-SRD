@@ -83,7 +83,7 @@ from PIL import Image
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 
 
-def bar_graph_recentincidents(data, cmap_name="viridis", logo_path="./images/srd.png"):
+def bar_graph_recentincidents(data, bar_color="#30a2da", logo_path="./images/srd.png"):
     """
     Plots a bar graph of recent incidents per driver and saves the output to an image file.
 
@@ -92,15 +92,19 @@ def bar_graph_recentincidents(data, cmap_name="viridis", logo_path="./images/srd
     cmap_name: The name of the color map to use. Default is 'viridis'.
     logo_path: The file path to the logo to be displayed in the plot. Default is './images/srd.png'.
     """
+    plt.style.use("fivethirtyeight")
     plt.clf()
 
     driver_names = list(data.keys())
     recent_incidents = list(data.values())
 
-    # Configure color map
-    cmap = plt.get_cmap(cmap_name)
-    norm = plt.Normalize(min(recent_incidents), max(recent_incidents))
-    colors = cmap(norm(recent_incidents))
+    if min(recent_incidents) == max(recent_incidents):
+        colors = [plt.get_cmap("Blues")(0.5) for _ in recent_incidents]  # middle shade of blue
+    else:
+        # Configure color map
+        cmap = plt.get_cmap("Blues")
+        norm = plt.Normalize(min(recent_incidents), max(recent_incidents))
+        colors = cmap(norm(recent_incidents))
 
     # Plot bar chart
     bars = plt.bar(driver_names, recent_incidents, color=colors)
@@ -124,8 +128,8 @@ def bar_graph_recentincidents(data, cmap_name="viridis", logo_path="./images/srd
     logo_img = Image.open(logo_path)
     logo_array = np.array(logo_img)
     imagebox = OffsetImage(logo_array, zoom=0.1)
-    ab = AnnotationBbox(imagebox, (0.9, 0.9), frameon=False, pad=0)
-    plt.gca().add_artist(ab)
+    #ab = AnnotationBbox(imagebox, (0, 1), frameon=False, pad=0)
+    #plt.gca().add_artist(ab)
 
     # Configure additional plot settings
     plt.gca().set_facecolor("none")
@@ -238,7 +242,7 @@ def line_chart_laps(data):
         np.arange(min(lap_numbers), max(lap_numbers) + 1, 1.0), fontsize=12, rotation=90
     )
 
-    plt.legend(["Lap Times", "Trendline (Excluding first lap)"])  # Display legend
+    plt.legend(["Trendline (Excluding First Lap)", "Lap Time"])  # Display legend
     plt.grid(True)
 
     ax = plt.gca()  # get the current axes
@@ -254,8 +258,14 @@ def line_chart_laps(data):
     model = sm.OLS(y, X)
     results = model.fit()
 
-    coef_str = "Coef.: {:.3f}".format(results.params[1])
-    pvalue_str = "p-value: {:.3f}".format(results.pvalues[1])
+    if len(results.params) > 1:
+        coef_str = "Coef.: {:.3f}".format(results.params[1])
+    else:
+        coef_str = "Coef. is not available"
+    if len(results.pvalues) > 1:
+        pvalue_str = "p-value: {:.3f}".format(results.pvalues[1])
+    else:
+        pvalue_str = "p-value is not available"
 
     # Determine consistency based on p-value and coefficient
     pvalue_threshold = 2  # define your p-value threshold

@@ -2,11 +2,16 @@ import discord
 from discord.ext import commands
 from discord import ButtonStyle, ui, Interaction, Embed
 from discord.ui import Button, View, Select, button
+import logging 
 import os
 import json
 
 # Classes and methods for the server configuration menu
 
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
 
 def generate_embed(bot_commands):
     embed = discord.Embed(title="Bot commands", description="List of iRacing Commands:")
@@ -15,6 +20,75 @@ def generate_embed(bot_commands):
             name=command, value=f"Help text for {command} not available", inline=False
         )
     return embed
+
+
+class EmbedPaginatorView(View):
+    def __init__(self, embeds):
+        super().__init__(timeout=180.0)  # Adjust the timeout as needed
+        self.embeds = embeds
+        self.current_embed = 0
+
+        self.update_view()
+
+    def clear_items(self):
+        """Clear all items (buttons) from the view."""
+        self.children.clear()
+
+    def create_embed(self, page_number):
+        """Create a single embed for the given page number."""
+        page_data = self.embeds[page_number]
+        description = []
+        
+        for idx, season in enumerate(page_data['seasons'], start=1):
+            season_info = (
+                f"{idx}. Series Name: {season['series_name']}\n"
+                f"   Season Name: {season['season_name']}\n"
+                f"   Official: {season['official']}\n"
+                f"   Season Year: {season['season_year']}\n"
+                f"   Season Quarter: {season['season_quarter']}\n"
+                f"   License Group: {season['license_group']}\n"
+                f"   Fixed Setup: {season['fixed_setup']}\n"
+                f"   Driver Changes: {season['driver_changes']}\n"
+            )
+            description.append(season_info)
+
+        embed = discord.Embed(
+            title='Season Events',
+            description='\n'.join(description),
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text=f'Page {page_number+1}/{len(self.embeds)}')
+
+        return embed
+
+    def update_view(self):
+        """Update buttons and add them to the view."""
+        self.clear_items()
+
+        if self.current_embed > 0:
+            self.previous_button = ui.Button(style=ButtonStyle.primary, label="Previous", custom_id="previous_btn")
+            self.previous_button.callback = self.on_previous_click
+            self.add_item(self.previous_button)
+
+        if self.current_embed < len(self.embeds) - 1:
+            self.next_button = ui.Button(style=ButtonStyle.primary, label="Next", custom_id="next_btn")
+            self.next_button.callback = self.on_next_click
+            self.add_item(self.next_button)
+
+    async def on_previous_click(self, interaction: Interaction):
+        if self.current_embed > 0:
+            self.current_embed -= 1
+            embed = self.create_embed(self.current_embed)
+            await interaction.response.edit_message(embed=embed)
+            self.update_view()
+
+    async def on_next_click(self, interaction: Interaction):
+        if self.current_embed < len(self.embeds) - 1:
+            self.current_embed += 1
+            embed = self.create_embed(self.current_embed)
+            await interaction.response.edit_message(embed=embed)
+            self.update_view()
+
 
 
 class ir_MenuView(View):
