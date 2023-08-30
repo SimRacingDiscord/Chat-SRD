@@ -422,3 +422,26 @@ def line_chart_race_position_interpolate(data):
         bbox_inches="tight",
         bbox_extra_artists=(lgd,),
     )
+
+def recentraces_trendline(races_data):
+    finish_positions = [race['finish_position'] for race in races_data]
+    if finish_positions[-1] < finish_positions[0]:
+        trend = "Getting better..."
+    elif finish_positions[-1] > finish_positions[0]:
+        trend = "Getting worse..."
+    else:
+        trend = "Stuck in a rut..."
+    plt.figure(figsize=(10,6))
+    plt.style.use("fivethirtyeight")
+    plt.plot(finish_positions, '-o', label='Finish Position')
+    plt.gca().invert_yaxis()  # Lower finish positions (e.g., 1st) are better
+    plt.title(f"Race Finish Positions: {trend}")
+    plt.xlabel('Race')
+    plt.ylabel('Finish Position')
+    plt.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    image_path = "./images/recentraces_trend.png"
+    plt.savefig(image_path)
+    plt.close()
+    return image_path
+    

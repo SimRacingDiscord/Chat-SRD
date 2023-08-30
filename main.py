@@ -19,7 +19,7 @@ from discord import Embed, File, app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from gpt import OpenAI
-import re
+from iracing_stats import recentraces_trendline
 import pandas as pd
 import interactions
 
@@ -41,8 +41,7 @@ cleanup_interval = 12
 global cleanup_enabled
 cleanup_enabled = True
 ir_service_monitor_enabled = False
-user_id_to_monitor = 663521697860943936  # iRacing Stats bot
-self_id_to_monitor = 1085398619278024766  # ChatSRD bot
+user_ids_to_monitor = [663521697860943936,1085398619278024766] # iRacing Stats bot and ChatSRD bot
 ir_service_monitor_channels = [
     1121817152081629234,
     204786457280380928,
@@ -121,11 +120,11 @@ async def setupsheet(ctx):
     await ctx.send(file=File(".\\images\setup-sheet.jpg"))
     logger.info(f"{ctx.author} called the setupsheet command.")
 
-
-@bot.command(name="sdk", help="Watch SDK get into a wreck")
-async def sdk(ctx):
-    await ctx.send("https://www.twitch.tv/sdktheway")
-    logger.info(f"{ctx.author} called the SDK command.")
+@bot.tree.command(name='sdk', description='Watch SDK get into a wreck.')
+@app_commands.describe()
+async def sdk(Interaction: discord.Interaction):
+    await Interaction.response.send_message("https://www.twitch.tv/sdktheway", ephemeral=False)
+    logger.info(f"{Interaction.user} called the SDK command.")
 
 
 @bot.command(
@@ -211,7 +210,7 @@ async def interval(ctx, hours: int):
     name="cleanup", help="Manually cleans up iRacing Stats threads.\n Usage: /cleanup"
 )
 async def cleanup_now(ctx):
-    global last_cleanup_time, cleanup_interval, cleanup_enabled, user_id_to_monitor
+    global last_cleanup_time, cleanup_interval, cleanup_enabled, user_ids_to_monitor
 
     now = datetime.now()
     for channel_id in read_channel_ids():
@@ -220,7 +219,7 @@ async def cleanup_now(ctx):
             deleted_messages = []
             async for message in channel.history(limit=None):
                 if (
-                    message.author.id == user_id_to_monitor
+                    message.author.id in user_ids_to_monitor
                     and message.created_at.timestamp()
                     < (now - timedelta(hours=cleanup_interval)).timestamp()
                 ):
@@ -390,7 +389,7 @@ async def ir_service_monitor_task():
 async def cleanup_old_messages():
     """purpose: Deletes messages older than the cleanup interval from the channels in the channel_ids list."""
 
-    global last_cleanup_time, cleanup_interval, cleanup_enabled, user_id_to_monitor
+    global last_cleanup_time, cleanup_interval, cleanup_enabled, user_ids_to_monitor
 
     while not bot.is_closed():
         if cleanup_enabled:
@@ -404,7 +403,7 @@ async def cleanup_old_messages():
                     deleted_messages = []
                     async for message in channel.history(limit=None):
                         if (
-                            message.author.id in user_id_to_monitor
+                            message.author.id in user_ids_to_monitor
                             and message.created_at.timestamp()
                             < (now - timedelta(hours=cleanup_interval)).timestamp()
                         ):
@@ -738,6 +737,58 @@ async def ir_lastrace_slash(Interaction: discord.Interaction , driver_name:str):
     embed.add_field(name="iRating", value=irating_str, inline=False)
     # embed.set_footer(text="chat-SRD iRacing Data API Bot - #Simracing Discord")
     await Interaction.response.send_message(embed=embed)
+
+async def create_membersite_link(subsession_id, cust_id):
+    return f'https://members.iracing.com/membersite/member/EventResult.do?&subsessionid={subsession_id}&custid={cust_id}'
+
+@bot.tree.command(name='ir_recentraces', description="Display Stats on a Drivers Recent Races.")
+@app_commands.describe(
+    driver_name="Enter the driver's iRacing name.")
+async def ir_recent_races_slash(Interaction: discord.Interaction, driver_name: str):
+    # Convert driver name to customer ID
+    customer_id = iracing_api.lookup_driver(driver_name)  # Assuming lookup_driver returns the customer ID
+    
+    if not customer_id:
+        await Interaction.response.send_message(f"Couldn't find a driver with the name {driver_name}.", ephemeral=True)
+        return
+
+    # Fetch recent races data
+    recent_races_data = iracing_api.get_stats_member_recent_races(customer_id)
+    
+    # Generate the trendline graph
+    image_path = recentraces_trendline(recent_races_data)  # From ir_data_gui module
+    
+    hot_pink = int("FF69B4", 16)
+    embed = Embed(title=f"Last 5 races for {driver_name}", color=hot_pink)
+    embed.set_image(url="attachment://race_trend.png")
+    
+    # Process and format the data
+    for race in recent_races_data[:5]:  # Limit to the last 5 races
+        race_details = (
+            f"Track: {race['track']['track_name']}\n"
+            f"Date: {race['session_start_time']}\n"
+            f"Start Position: {race['start_position']} | Finish Position: {race['finish_position']}\n"
+            f"Strength of Field {race['strength_of_field']}\n"
+            f"Incidents: {race['incidents']} | Points: {race['points']}\n"
+            f"iRacing Membersite Link: [Click here](https://members.iracing.com/membersite/member/EventResult.do?&subsessionid={race['subsession_id']}&custid={customer_id})\n"
+        )
+        embed.add_field(name=f"Series: {race['series_name']}", value=race_details, inline=False)
+
+    # Send the embed and the image
+    with open(image_path, 'rb') as img:
+        await Interaction.response.send_message(embed=embed, file=discord.File(img, filename="race_trend.png"))
+
+    
+    #message = f"Last 5 races for {driver_name}:\n\n"
+    #for race in recent_races_data[:5]:  # Limit to the last 5 races
+    #    message += f"Series: {race['series_name']}\n"
+    #    message += f"Track: {race['track']['track_name']}\n"
+    #    message += f"Date: {race['session_start_time']}\n"
+    #    message += f"Start Position: {race['start_position']} | Finish Position: {race['finish_position']}\n"
+    #    message += f"Incidents: {race['incidents']} | Points: {race['points']}\n"
+    #    message += "-"*40 + "\n"  # separator
+
+    #await interaction.response.send_message(message, ephemeral=False)
 
 
 @bot.tree.command(name='ir_consistency', description="Display a Driver's lap consistency ")

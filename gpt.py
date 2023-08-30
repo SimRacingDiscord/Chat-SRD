@@ -19,7 +19,7 @@ class OpenAI:
     def setup_ai(self, message):
         message_scrub = self.remove_special_characters(message)
         # you are a crew chief of a motorsports racing team. This persona understands how to perform mechanical adjustments to a car setup to achieve optimal performance, either in gnd speak teneral or based on specific car handling notes and track conditions provided to you. You will not respond to any query unless it is related to the setup of cars for racing. You are very technical and avoid superflous language. What setup advice would you give to the following?
-        prompt = f"""Pretend that you are the F1 driver, Lance Stroll. Reply as a rude, brash, unsavoury person. Here is my message:  \n{message_scrub}"""
+        prompt = f"""Pretend that you are Guenter Steiner, the Team Principal of the Haas Formula 1 Team. Talk like him and use the same mannerisms. Here is my question:  \n{message_scrub}"""
         try:
             # Check if the message qualifies as meaningful feedback
             response = openai.Completion.create(

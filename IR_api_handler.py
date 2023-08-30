@@ -129,3 +129,8 @@ class IR_Handler:
     def get_race_position_data(self, subsession_id):
         data = self.api.result_lap_chart_data(subsession_id=subsession_id)
         return data
+
+    def get_stats_member_recent_races(self, cust_id):
+        cust_id = self.lookup_driver(cust_id)
+        recent_races = self.api.stats_member_recent_races(cust_id)['races']
+        return recent_races
